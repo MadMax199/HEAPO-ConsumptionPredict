@@ -27,9 +27,9 @@ Dieses Dokument definiert die messbaren Erfolgskriterien für das Analyseprojekt
 ### Phase 4: Explorative Datenanalyse
 - [X] Univariate Analyse für alle Features durchgeführt
 - [X] Bivariate/multivariate Analyse durchgeführt
-- [] Wesentliche Muster und Erkenntnisse dokumentiert
-- [] Visualisierungs-Dashboard erstellt
-- [] Statistische Zusammenfassung erstellt
+- [x] Wesentliche Muster und Erkenntnisse dokumentiert
+- [x] Visualisierungs-Dashboard erstellt
+- [x] Statistische Zusammenfassung erstellt
 
 ### Phase 5: Feature Engineering
 - [] Relevante Features aus Rohdaten erstellt

@@ -99,7 +99,26 @@ fill_unbekannt_list = [
     'dhw_temperaturesetting_categorization', 'heatdistribution_expansiontank_pressure_categorization'
 ]
 
+target_col = "kwh_received_total"
 
+feature_cols = [
+    "kwh_received_heatpump",
+    "kwh_returned_total",
+    "temperature_avg_daily",
+    "swissix_base",
+    "building_type",
+    "weekday",
+    "is_weekend",
+    "is_heating_season",
+    "renovation_score",
+    "heating_amount",
+    "price_lag_30d",
+    "price_lag_90d",
+    "price_rolling_mean_30d",
+    "price_rolling_mean_90d",
+    "price_relative_to_month",
+    "solar_thermal_potential"
+]
 
 class Schema(pa.DataFrameModel):
     # Hier müssen die echten Spaltennamen aus deinem Dataframe stehen:
@@ -239,3 +258,6 @@ class Schema(pa.DataFrameModel):
     heatdistribution_recommendation_installthermostaticvalve: pl.Boolean
     heatdistribution_recommendation_installrpmvalve: pl.Boolean
     swissix_base: pl.Float64
+
+
+
