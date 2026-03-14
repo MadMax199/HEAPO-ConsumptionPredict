@@ -117,6 +117,19 @@ feature_cols = [
     "temp_inertia_ema_3d", "temp_delta_1d", "month_sin", "month_cos"
 ]
 
+feature_cols_cleaned = [
+    "temperature_avg_daily",
+    "kwh_returned_total",
+    "temp_delta_1d",
+    "kwh_received_heatpump",
+    "price_lag_30d",
+    "price_relative_to_month",
+    "swissix_base",
+    "weekday",
+    "month_sin",
+    "month_cos"
+]
+
 class Schema(pa.DataFrameModel):
     # Hier müssen die echten Spaltennamen aus deinem Dataframe stehen:
     timestamp: pl.Datetime(time_unit="us", time_zone="UTC")

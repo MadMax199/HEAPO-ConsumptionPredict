@@ -21,7 +21,7 @@ from config import (
     fill_median_list, fill_inter_list,
     fill_string_float, fill_string_boolean, 
     fill_string_integer, fill_unbekannt_list,
-    target_col, feature_cols
+    target_col, feature_cols, feature_cols_cleaned
 )
 from data_combine import join_data
 from data_loader import smartmeter_load, household_load, house_info_load, weather_load, load_price_data
@@ -92,7 +92,8 @@ data_combined_filled = (
     .pipe(apply_interpolation, fill_inter_list)
 )
 
-# Direkter CHeck in der Pipline on die Inputaiton erfolgreich war
+# ---  Direkter Check in der Pipline --- 
+
 compare_imputation(
     df_before=data_combined,
     df_after=data_combined_filled,
@@ -107,7 +108,7 @@ compare_imputation(
 )
 
 
-# Zwischenspeichern Raw-Combined
+# ---  Zwischenspeichern Raw-Combined --- Notwendig um Pipline Entwicklung zu beschleunigen
 output_path_temp = root_dir / "02_data" / "temp" / "combined_data.csv"
 output_path_temp.parent.mkdir(parents=True, exist_ok=True)
 data_combined_filled.write_csv(str(output_path_temp), separator=";")
@@ -180,21 +181,23 @@ feature_importance_analyse(
     filename="shap_plot.png"
 )
 
+#--Datensatz nach der Analyse reduzieren
+
+
+X_train_red, X_test_red, y_train_red, y_test_red = train_test_split(
+    df_ml, 
+    feature_cols=feature_cols_cleaned, 
+    target_col=target_col
+)
+
+#--- Korrelations-Check auf dem reduzierten Set
+X_train_final, X_test_final, final_features = correlated_features_drop(
+    X_train_red, 
+    X_test_red,
+    feautre_cols=feature_cols_cleaned
+)
+
+
 #---Modellvergleich um das beste Modell zu finden
 comparison = compare_models(X_train_cleaned, X_test_cleaned, y_train, y_test)
 print(comparison)
-
-#---Modell Tuning auf Basis des Output des Modellchecks
-
-best_rf = tune_random_forest(X_train_cleaned, y_train)
-tscv = TimeSeriesSplit(n_splits=5)
-scores = cross_val_score(best_rf, X_train_cleaned, y_train, cv=tscv, scoring='r2')
-print(f"CV R² Scores: {scores}")
-print(f"Mean CV R²: {scores.mean():.4f}")
-
-# ---Finale Validierung mit dem getunten Modell
-y_pred_final = best_rf.predict(X_test_cleaned)
-final_r2 = r2_score(y_test, y_pred_final)
-final_mae = mean_absolute_error(y_test, y_pred_final)
-
-plot_final_prediction(y_test, y_pred_final)
