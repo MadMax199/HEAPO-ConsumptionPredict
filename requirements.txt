@@ -13,6 +13,8 @@ ydata_profiling
 
 # Machine Learning
 scikit-learn
+xgboost
+lightgbm
 
 # Jupyter Notebook Support
 ipykernel

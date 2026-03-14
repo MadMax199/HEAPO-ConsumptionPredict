@@ -18,6 +18,8 @@ from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
 import seaborn as sns
+from lightgbm import LGBMRegressor
+
 
 def check_missing_values(df: pl.DataFrame):
     """
@@ -107,49 +109,38 @@ def feature_importance_analyse(model, X_test, output_dir= "../05_plots",filename
     print(f"Beide Plots wurden in {output_dir} gespeichert.")
 
 
-def compare_models(X_train, X_test, y_train, y_test):
-    # Stichprobengröße festlegen
+def compare_models(X_train, X_test, y_train, y_test, label: str = ""):
     sample_size = min(len(X_train), 5000)
     print(f"--- Benchmark gestartet (Sample-Größe: {sample_size}) ---")
-    
-    # Zufällige Indizes ziehen
     indices = np.random.choice(len(X_train), sample_size, replace=False)
-    
-    # Sicherer Zugriff auf X (Pandas)
     X_train_sub = X_train.iloc[indices]
-    
-    # Sicherer Zugriff auf y (Numpy oder Pandas)
-    if hasattr(y_train, "iloc"):
-        y_train_sub = y_train.iloc[indices]
-    else:
-        y_train_sub = y_train[indices]
+    y_train_sub = y_train.iloc[indices] if hasattr(y_train, "iloc") else y_train[indices]
+
+    median_vals = X_train_sub.median()
+    X_train_sub = X_train_sub.fillna(median_vals)
+    X_test_clean = X_test.fillna(median_vals)
 
     models = {
         "Ridge (Linear)": Ridge(),
         "XGBoost (Fast)": XGBRegressor(
-            n_estimators=100, 
-            tree_method="hist", 
-            n_jobs=-1,
-            random_state=42
+            n_estimators=100, tree_method="hist", n_jobs=-1, random_state=42
+        ),
+        "LightGBM": LGBMRegressor(                  # NEU
+            n_estimators=100, n_jobs=-1, random_state=42, verbose=-1
         ),
         "RandomForest (Limited)": RandomForestRegressor(
-            n_estimators=50, 
-            max_depth=12,
-            n_jobs=-1, 
-            random_state=42
+            n_estimators=50, max_depth=12, n_jobs=-1, random_state=42
         )
     }
-    
+
     results = []
     for name, model in models.items():
         print(f"  -> Teste {name}...", end=" ", flush=True)
         t0 = time.time()
-        
         try:
             model.fit(X_train_sub, y_train_sub)
             t1 = time.time()
-            
-            preds = model.predict(X_test)
+            preds = model.predict(X_test_clean)
             results.append({
                 "Model": name,
                 "MAE_kWh": round(mean_absolute_error(y_test, preds), 3),
@@ -159,7 +150,7 @@ def compare_models(X_train, X_test, y_train, y_test):
             print(f"Fertig ({results[-1]['Duration_sec']}s)")
         except Exception as e:
             print(f"FEHLER bei {name}: {e}")
-            
+
     return pd.DataFrame(results).sort_values("MAE_kWh")
 
 

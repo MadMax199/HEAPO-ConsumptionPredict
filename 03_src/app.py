@@ -1,7 +1,7 @@
 import sys
 import os
 import polars as pl
-import pandas as pd
+import numpy as np
 from pathlib import Path
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score, mean_absolute_error
@@ -161,11 +161,24 @@ X_train, X_test, y_train, y_test = train_test_split(df_ml,feature_cols=feature_c
 X_train_cleaned, X_test_cleaned, final_features = correlated_features_drop(X_train, X_test,feautre_cols=feature_cols)
 
 #---Random Forst als Basis verwenden 
-rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-rf.fit(X_train_cleaned, y_train)
+sample_idx = np.random.choice(len(X_train_cleaned), 20_000, replace=False)
+X_sample = X_train_cleaned.iloc[sample_idx]
+y_sample = y_train[sample_idx]
 
-#---Feature Importance und Validierung 
-feature_importance_analyse(model=rf, X_test= X_test_cleaned,output_dir= os.path.join(root_dir, "05_plots"),filename="shape_plot.png")
+rf = RandomForestRegressor(
+    n_estimators=50,   # war 100 – für SHAP reichen 50
+    max_depth=10,      # begrenzt Tiefe → massiv schneller
+    random_state=42,
+    n_jobs=-1
+)
+rf.fit(X_sample, y_sample)
+
+feature_importance_analyse(
+    model=rf,
+    X_test=X_test_cleaned,
+    output_dir=os.path.join(root_dir, "05_plots"),
+    filename="shap_plot.png"
+)
 
 #---Modellvergleich um das beste Modell zu finden
 comparison = compare_models(X_train_cleaned, X_test_cleaned, y_train, y_test)
