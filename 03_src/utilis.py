@@ -2,14 +2,12 @@
 import polars as pl
 import numpy as np
 import os
-import glob
 from sklearn.linear_model import Ridge
 from xgboost import XGBRegressor 
 from sklearn.metrics import mean_absolute_error, r2_score
 import time
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import RandomizedSearchCV
 import time
 import shap
 import pandas as pd
@@ -19,6 +17,13 @@ from sklearn.metrics import mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 from lightgbm import LGBMRegressor
+import lightgbm as lgb
+import optuna
+import joblib
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.model_selection import TimeSeriesSplit, cross_validate
+
 
 
 def check_missing_values(df: pl.DataFrame):
@@ -153,59 +158,210 @@ def compare_models(X_train, X_test, y_train, y_test, label: str = ""):
 
     return pd.DataFrame(results).sort_values("MAE_kWh")
 
+def validate_model_assumptions(model, X_test, y_test, output_dir):
+    """
+    Validiert die Modellannahmen eines trainierten Regressionsmodells.
+    Erstellt drei Plots: Residuen vs. Vorhersage, Residuen-Verteilung, Actual vs. Predicted.
+    """
+    y_pred    = model.predict(X_test)
+    residuals = y_test - y_pred
 
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-def tune_random_forest(X_train, y_train):
-    print("--- Starte Hyperparameter-Tuning (RandomizedSearch) ---")
-    
-    param_dist = {
-        'n_estimators': [50, 100, 200],
-        'max_depth': [10, 15, 20, None],
-        'min_samples_split': [2, 5, 10],
-        'min_samples_leaf': [1, 2, 4],
-        'max_features': ['sqrt', 'log2', None]
-    }
-    
-    rf = RandomForestRegressor(random_state=42, n_jobs=-1)
-    
-    # cv=3 reicht bei Zeitreihen oft aus, um eine Tendenz zu sehen
-    random_search = RandomizedSearchCV(
-        estimator=rf, 
-        param_distributions=param_dist, 
-        n_iter=15, 
-        cv=3, 
-        scoring='neg_mean_absolute_error',
-        verbose=1,
-        random_state=42,
-        n_jobs=-1
+    # --- Plot 1: Residuen vs. Vorhersage ---
+    axes[0].scatter(y_pred, residuals, alpha=0.3, color="steelblue", s=10)
+    axes[0].axhline(0, color="red", linestyle="--")
+    axes[0].set_title("Residuen vs. Vorhersage")
+    axes[0].set_xlabel("Vorhergesagter Verbrauch (kWh)")
+    axes[0].set_ylabel("Residuum (kWh)")
+
+    # --- Plot 2: Residuen-Verteilung ---
+    axes[1].hist(residuals, bins=50, color="steelblue", edgecolor="white")
+    axes[1].axvline(0, color="red", linestyle="--")
+    axes[1].set_title("Verteilung der Residuen")
+    axes[1].set_xlabel("Residuum (kWh)")
+    axes[1].set_ylabel("Häufigkeit")
+
+    # --- Plot 3: Actual vs. Predicted ---
+    axes[2].scatter(y_test, y_pred, alpha=0.3, color="steelblue", s=10)
+    axes[2].plot([y_test.min(), y_test.max()],
+                 [y_test.min(), y_test.max()],
+                 color="red", linestyle="--")
+    axes[2].set_title("Actual vs. Predicted")
+    axes[2].set_xlabel("Tatsächlicher Verbrauch (kWh)")
+    axes[2].set_ylabel("Vorhergesagter Verbrauch (kWh)")
+
+    plt.suptitle("Modellannahmen-Validierung", fontsize=14)
+    plt.tight_layout()
+
+    path = os.path.join(output_dir, "model_validation.png")
+    plt.savefig(path)
+    plt.close()
+
+    print(f"   Mean Residuum:      {residuals.mean():.3f} kWh  (sollte ~0 sein)")
+    print(f"   Std Residuum:       {residuals.std():.3f} kWh")
+    print(f"   Max Unterschätzung: {residuals.max():.3f} kWh")
+    print(f"   Max Überschätzung:  {residuals.min():.3f} kWh")
+    print(f"📊 Validierungsplot gespeichert: {path}")
+
+    return residuals
+
+def evaluate_with_cv(model, X_train, y_train, n_splits=5):
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    scores = cross_validate(
+        model, X_train, y_train,
+        cv=tscv,
+        scoring={"MAE": "neg_mean_absolute_error", "R2": "r2"},
+        return_train_score=True
     )
-    
-    random_search.fit(X_train, y_train)
-    
-    print(f"Beste Parameter: {random_search.best_params_}")
-    return random_search.best_estimator_
+    print(f"CV MAE:  {-scores['test_MAE'].mean():.3f} ± {scores['test_MAE'].std():.3f} kWh")
+    print(f"CV R²:   {scores['test_R2'].mean():.3f} ± {scores['test_R2'].std():.3f}")
+    return scores
 
 
-def plot_final_prediction(y_test, y_pred, n_days=30):
+def tune_lightgbm(
+    X_train, y_train, X_test, y_test,
+    final_features,
+    output_dir,
+    n_trials=50,
+    n_splits=5
+):
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+
+    # --- OPTUNA OBJECTIVE ---
+    def objective(trial):
+        params = {
+            "objective": "regression",
+            "metric": "mae",
+            "verbosity": -1,
+            "boosting_type": "gbdt",
+            "n_estimators": trial.suggest_int("n_estimators", 100, 1000),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 20, 150),
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
+            "min_child_samples": trial.suggest_int("min_child_samples", 10, 100),
+            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 1.0, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 1.0, log=True),
+        }
+
+        mae_scores = []
+        for train_idx, val_idx in tscv.split(X_train):
+            X_tr, X_val = X_train.iloc[train_idx], X_train.iloc[val_idx]
+            y_tr, y_val = y_train[train_idx], y_train[val_idx]
+
+            model = lgb.LGBMRegressor(**params)
+            model.fit(
+                X_tr, y_tr,
+                eval_set=[(X_val, y_val)],
+                callbacks=[lgb.early_stopping(50, verbose=False),
+                           lgb.log_evaluation(period=-1)]
+            )
+            preds = model.predict(X_val)
+            mae_scores.append(mean_absolute_error(y_val, preds))
+
+        return np.mean(mae_scores)
+
+    # --- TUNING ---
+    print("🔍 Starte Optuna Tuning...")
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction="minimize")
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+    print(f"✅ Bestes MAE (CV): {study.best_value:.3f} kWh")
+    print(f"✅ Beste Parameter: {study.best_params}")
+
+    # --- FINALES MODELL ---
+    best_params = {
+        "objective": "regression",
+        "metric": "mae",
+        "verbosity": -1,
+        **study.best_params
+    }
+
+    final_model = lgb.LGBMRegressor(**best_params)
+
+    # Lernkurven-Daten sammeln
+    evals_result = {}
+    X_tr_final, X_val_final = X_train.iloc[:int(len(X_train)*0.8)], X_train.iloc[int(len(X_train)*0.8):]
+    y_tr_final, y_val_final = y_train[:int(len(y_train)*0.8)], y_train[int(len(y_train)*0.8):]
+
+    final_model.fit(
+        X_tr_final, y_tr_final,
+        eval_set=[(X_tr_final, y_tr_final), (X_val_final, y_val_final)],
+        eval_names=["train", "val"],
+        callbacks=[
+            lgb.record_evaluation(evals_result),
+            lgb.early_stopping(50, verbose=False),
+            lgb.log_evaluation(period=-1)
+        ]
+    )
+
+    # --- LERNKURVEN PLOT ---
+    plt.figure(figsize=(10, 5))
+    plt.plot(evals_result["train"]["l1"], label="Train MAE", color="steelblue")
+    plt.plot(evals_result["val"]["l1"], label="Val MAE", color="tomato")
+    plt.axvline(x=final_model.best_iteration_, color="gray", linestyle="--", label="Best Iteration")
+    plt.xlabel("Iteration")
+    plt.ylabel("MAE (kWh)")
+    plt.title("LightGBM Lernkurven")
+    plt.legend()
+    plt.tight_layout()
+    plot_path = os.path.join(output_dir, "lgbm_learning_curve.png")
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"📊 Lernkurven gespeichert: {plot_path}")
+
+    # --- TEST EVALUATION ---
+    y_pred = final_model.predict(X_test)
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+    print(f"\n📈 Test-Ergebnisse:")
+    print(f"   MAE:  {mae:.3f} kWh")
+    print(f"   R²:   {r2:.3f}")
+
+    # --- MODELL SPEICHERN ---
+    model_path = os.path.join(output_dir, "lgbm_final_model.pkl")
+    joblib.dump(final_model, model_path)
+    print(f"💾 Modell gespeichert: {model_path}")
+
+    return final_model, study
+
+
+def plot_final_prediction(y_test, y_pred, output_dir, n_days=30, filename="final_prediction.png"):
     plt.figure(figsize=(14, 6))
-    # Wir plotten einen Ausschnitt von 30 Tagen (Tagesbasis)
     plt.plot(range(n_days), y_test[:n_days], label='Realität (Smart Meter)', color='#1f77b4', linewidth=2, marker='o')
-    plt.plot(range(n_days), y_pred[:n_days], label='KI-Vorhersage', color='#ff7f0e', linestyle='--', linewidth=2, marker='x')
+    plt.plot(range(n_days), y_pred[:n_days], label='KI-Vorhersage (LightGBM)', color='#ff7f0e', linestyle='--', linewidth=2, marker='x')
     
-    plt.title(f"Modell-Präzision über {n_days} Tage", fontsize=16)
+    mae = mean_absolute_error(y_test[:n_days], y_pred[:n_days])
+    r2  = r2_score(y_test[:n_days], y_pred[:n_days])
+    
+    plt.title(f"Modell-Präzision über {n_days} Tage | MAE: {mae:.2f} kWh | R²: {r2:.3f}", fontsize=14)
     plt.xlabel("Tage im Testzeitraum", fontsize=12)
     plt.ylabel("Verbrauch (kWh)", fontsize=12)
     plt.legend(fontsize=12)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.show()
+    
+    path = os.path.join(output_dir, filename)
+    plt.savefig(path)
+    plt.close()
+    print(f"📊 Prediction Plot gespeichert: {path}")
 
-def plot_business_drivers(model, X_sample):
+
+def plot_business_drivers(model, X_sample, output_dir, filename="business_drivers.png"):
+    explainer   = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_sample)
+    
     plt.figure(figsize=(10, 8))
-    # SHAP Summary Plot als Bar-Chart (Magnitude)
     shap.summary_plot(shap_values, X_sample, plot_type="bar", show=False)
     
     plt.title("Business-Treiber: Welche Faktoren beeinflussen den Heizverbrauch?", fontsize=14)
     plt.xlabel("Durchschnittlicher Einfluss auf die Vorhersage (kWh)", fontsize=12)
     plt.tight_layout()
-    plt.show()
+    
+    path = os.path.join(output_dir, filename)
+    plt.savefig(path)
+    plt.close()
+    print(f"📊 Business Drivers Plot gespeichert: {path}")

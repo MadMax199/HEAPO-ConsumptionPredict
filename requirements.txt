@@ -5,6 +5,7 @@ polars>=1.0.0
 numpy>=1.23.5,<2.0.0
 pandas
 pandera
+
 # Visualisierung
 matplotlib
 seaborn
@@ -13,12 +14,15 @@ ydata_profiling
 
 # Machine Learning
 scikit-learn
+shap
 xgboost
 lightgbm
+optuna 
 
 # Jupyter Notebook Support
 ipykernel
 notebook
+pyarrow
 
 # Utilities & Scraping
 tqdm

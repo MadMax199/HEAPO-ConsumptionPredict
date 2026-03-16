@@ -9,6 +9,7 @@ from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 import matplotlib.pyplot as plt
 import seaborn as sns
 import shap
+from sklearn.model_selection import TimeSeriesSplit, cross_validate
 
 # --- PFAD SETUP ---
 current_dir = Path(__file__).resolve().parent
@@ -43,8 +44,9 @@ solar_potentials, add_thermal_dynamics, add_cyclic_features, add_building_type_d
 )
 from utilis import (
     train_test_split, correlated_features_drop,
-    feature_importance_analyse, compare_models,tune_random_forest,
-    plot_final_prediction
+    feature_importance_analyse, compare_models,
+    tune_lightgbm, plot_final_prediction,
+    plot_business_drivers, validate_model_assumptions
 )
 
 # --- PFADE ---
@@ -167,13 +169,14 @@ X_sample = X_train_cleaned.iloc[sample_idx]
 y_sample = y_train[sample_idx]
 
 rf = RandomForestRegressor(
-    n_estimators=50,   # war 100 – für SHAP reichen 50
-    max_depth=10,      # begrenzt Tiefe → massiv schneller
+    n_estimators=50,   
+    max_depth=10,     
     random_state=42,
     n_jobs=-1
 )
 rf.fit(X_sample, y_sample)
 
+#---Random Forst als Basis verwenden 
 feature_importance_analyse(
     model=rf,
     X_test=X_test_cleaned,
@@ -182,22 +185,69 @@ feature_importance_analyse(
 )
 
 #--Datensatz nach der Analyse reduzieren
-
-
 X_train_red, X_test_red, y_train_red, y_test_red = train_test_split(
     df_ml, 
     feature_cols=feature_cols_cleaned, 
-    target_col=target_col
+    target_col=target_col,
 )
-
 #--- Korrelations-Check auf dem reduzierten Set
 X_train_final, X_test_final, final_features = correlated_features_drop(
     X_train_red, 
     X_test_red,
     feautre_cols=feature_cols_cleaned
 )
-
-
 #---Modellvergleich um das beste Modell zu finden
-comparison = compare_models(X_train_cleaned, X_test_cleaned, y_train, y_test)
+comparison = compare_models(X_train_final, X_test_final, y_train_red, y_test_red)
 print(comparison)
+
+#---Gewinnermodell tunen
+lgbm_model, study = tune_lightgbm(
+    X_train=X_train_final,
+    y_train=y_train_red,
+    X_test=X_test_final,
+    y_test=y_test_red,
+    final_features=final_features,
+    output_dir=os.path.join(root_dir, "05_plots"),
+    n_trials=50
+)
+
+#--Modellannahmen validieren 
+print("\n--- Modellannahmen Validierung ---")
+validate_model_assumptions(
+    model=lgbm_model,
+    X_test=X_test_final,
+    y_test=y_test,
+    output_dir=os.path.join(root_dir, "05_plots")
+)
+
+#---Kreuzvalidierung
+print("\n--- Kreuzvalidierung ---")
+tscv = TimeSeriesSplit(n_splits=3)
+scores = cross_validate(
+    lgbm_model, X_train_final, y_train,
+    cv=tscv,
+    scoring={"MAE": "neg_mean_absolute_error", "R2": "r2"},
+    return_train_score=False
+)
+
+for i, (mae, r2) in enumerate(zip(-scores["test_MAE"], scores["test_R2"])):
+    print(f"Fold {i+1}: MAE={mae:.3f} kWh | R²={r2:.3f}")
+
+print(f"\nCV MAE:  {-scores['test_MAE'].mean():.3f} ± {scores['test_MAE'].std():.3f} kWh")
+print(f"CV R²:   {scores['test_R2'].mean():.3f} ± {scores['test_R2'].std():.3f}")
+
+#---Modell Prediciton
+y_pred = lgbm_model.predict(X_test_final)
+
+#---Prediciton visualisiere 
+plot_final_prediction(
+    y_test=y_test_red,
+    y_pred=y_pred,
+    output_dir=os.path.join(root_dir, "05_plots")
+)
+#---Businnes Drivers analysieren
+plot_business_drivers(
+    model=lgbm_model,
+    X_sample=X_test_final.sample(2000, random_state=42),  # Sample für Speed
+    output_dir=os.path.join(root_dir, "05_plots")
+)
