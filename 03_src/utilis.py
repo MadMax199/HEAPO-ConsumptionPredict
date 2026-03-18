@@ -158,13 +158,15 @@ def compare_models(X_train, X_test, y_train, y_test, label: str = ""):
 
     return pd.DataFrame(results).sort_values("MAE_kWh")
 
-def validate_model_assumptions(model, X_test, y_test, output_dir):
+def validate_model_assumptions(model, X_test, y_test, output_dir, log_transform=False):
+    
     """
     Validiert die Modellannahmen eines trainierten Regressionsmodells.
     Erstellt drei Plots: Residuen vs. Vorhersage, Residuen-Verteilung, Actual vs. Predicted.
     """
-    y_pred    = model.predict(X_test)
-    residuals = y_test - y_pred
+    y_pred_raw = model.predict(X_test)
+    y_pred     = np.expm1(y_pred_raw) if log_transform else y_pred_raw
+    residuals  = y_test - y_pred
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
@@ -218,15 +220,18 @@ def evaluate_with_cv(model, X_train, y_train, n_splits=5):
     print(f"CV R²:   {scores['test_R2'].mean():.3f} ± {scores['test_R2'].std():.3f}")
     return scores
 
-
 def tune_lightgbm(
     X_train, y_train, X_test, y_test,
     final_features,
     output_dir,
     n_trials=50,
-    n_splits=5
+    n_splits=5,
+    log_transform=False        # ← neu
 ):
     tscv = TimeSeriesSplit(n_splits=n_splits)
+
+    # --- LOG-TRANSFORMATION ---
+    y_train_fit = np.log1p(y_train) if log_transform else y_train
 
     # --- OPTUNA OBJECTIVE ---
     def objective(trial):
@@ -249,17 +254,20 @@ def tune_lightgbm(
         mae_scores = []
         for train_idx, val_idx in tscv.split(X_train):
             X_tr, X_val = X_train.iloc[train_idx], X_train.iloc[val_idx]
-            y_tr, y_val = y_train[train_idx], y_train[val_idx]
+            y_tr = y_train_fit[train_idx]
+            y_val_orig = y_train[val_idx]  # original für MAE-Berechnung
 
             model = lgb.LGBMRegressor(**params)
             model.fit(
                 X_tr, y_tr,
-                eval_set=[(X_val, y_val)],
+                eval_set=[(X_val, np.log1p(y_val_orig) if log_transform else y_val_orig)],
                 callbacks=[lgb.early_stopping(50, verbose=False),
                            lgb.log_evaluation(period=-1)]
             )
             preds = model.predict(X_val)
-            mae_scores.append(mean_absolute_error(y_val, preds))
+            # Immer auf originaler Skala evaluieren
+            preds_orig = np.expm1(preds) if log_transform else preds
+            mae_scores.append(mean_absolute_error(y_val_orig, preds_orig))
 
         return np.mean(mae_scores)
 
@@ -284,8 +292,10 @@ def tune_lightgbm(
 
     # Lernkurven-Daten sammeln
     evals_result = {}
-    X_tr_final, X_val_final = X_train.iloc[:int(len(X_train)*0.8)], X_train.iloc[int(len(X_train)*0.8):]
-    y_tr_final, y_val_final = y_train[:int(len(y_train)*0.8)], y_train[int(len(y_train)*0.8):]
+    X_tr_final  = X_train.iloc[:int(len(X_train)*0.8)]
+    X_val_final = X_train.iloc[int(len(X_train)*0.8):]
+    y_tr_final  = y_train_fit[:int(len(y_train_fit)*0.8)]
+    y_val_final = y_train_fit[int(len(y_train_fit)*0.8):]
 
     final_model.fit(
         X_tr_final, y_tr_final,
@@ -299,30 +309,35 @@ def tune_lightgbm(
     )
 
     # --- LERNKURVEN PLOT ---
+    suffix = "log" if log_transform else "std"
+    ylabel = "MAE (log kWh)" if log_transform else "MAE (kWh)"
+
     plt.figure(figsize=(10, 5))
     plt.plot(evals_result["train"]["l1"], label="Train MAE", color="steelblue")
     plt.plot(evals_result["val"]["l1"], label="Val MAE", color="tomato")
     plt.axvline(x=final_model.best_iteration_, color="gray", linestyle="--", label="Best Iteration")
     plt.xlabel("Iteration")
-    plt.ylabel("MAE (kWh)")
-    plt.title("LightGBM Lernkurven")
+    plt.ylabel(ylabel)
+    plt.title(f"LightGBM Lernkurven ({suffix})")
     plt.legend()
     plt.tight_layout()
-    plot_path = os.path.join(output_dir, "lgbm_learning_curve.png")
+    plot_path = os.path.join(output_dir, f"lgbm_learning_curve_{suffix}.png")
     plt.savefig(plot_path)
     plt.close()
     print(f"📊 Lernkurven gespeichert: {plot_path}")
 
-    # --- TEST EVALUATION ---
-    y_pred = final_model.predict(X_test)
+    # --- TEST EVALUATION (immer auf originaler Skala) ---
+    y_pred_raw = final_model.predict(X_test)
+    y_pred     = np.expm1(y_pred_raw) if log_transform else y_pred_raw
+
     mae = mean_absolute_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
+    r2  = r2_score(y_test, y_pred)
     print(f"\n📈 Test-Ergebnisse:")
     print(f"   MAE:  {mae:.3f} kWh")
     print(f"   R²:   {r2:.3f}")
 
     # --- MODELL SPEICHERN ---
-    model_path = os.path.join(output_dir, "lgbm_final_model.pkl")
+    model_path = os.path.join(output_dir, f"lgbm_final_model_{suffix}.pkl")
     joblib.dump(final_model, model_path)
     print(f"💾 Modell gespeichert: {model_path}")
 

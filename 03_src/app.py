@@ -199,28 +199,65 @@ X_train_final, X_test_final, final_features = correlated_features_drop(
 #---Modellvergleich um das beste Modell zu finden
 comparison = compare_models(X_train_final, X_test_final, y_train_red, y_test_red)
 print(comparison)
-
-#---Gewinnermodell tunen
-lgbm_model, study = tune_lightgbm(
+print("\n--- LightGBM Tuning (Standard) ---")
+lgbm_model_std, study_std = tune_lightgbm(
     X_train=X_train_final,
-    y_train=y_train_red,
+    y_train=y_train,
     X_test=X_test_final,
-    y_test=y_test_red,
+    y_test=y_test,
     final_features=final_features,
     output_dir=os.path.join(root_dir, "05_plots"),
-    n_trials=50
+    n_trials=50,
+    log_transform=False
 )
 
-#--Modellannahmen validieren 
+print("\n--- LightGBM Tuning (Log-Transformation) ---")
+lgbm_model_log, study_log = tune_lightgbm(
+    X_train=X_train_final,
+    y_train=y_train,
+    X_test=X_test_final,
+    y_test=y_test,
+    final_features=final_features,
+    output_dir=os.path.join(root_dir, "05_plots"),
+    n_trials=50,
+    log_transform=True
+)
+
+# --- Bestes Modell auswählen ---
+y_pred_std = lgbm_model_std.predict(X_test_final)
+y_pred_log = np.expm1(lgbm_model_log.predict(X_test_final))
+
+mae_std = mean_absolute_error(y_test, y_pred_std)
+mae_log = mean_absolute_error(y_test, y_pred_log)
+
+print(f"\n📊 Vergleich Standard vs. Log-Transformation:")
+print(f"   Standard – MAE: {mae_std:.3f} kWh | R²: {r2_score(y_test, y_pred_std):.3f}")
+print(f"   Log      – MAE: {mae_log:.3f} kWh | R²: {r2_score(y_test, y_pred_log):.3f}")
+
+if mae_log < mae_std:
+    print("\n✅ Log-Transformation ist besser – verwende log-transformiertes Modell")
+    lgbm_model = lgbm_model_log
+    y_pred     = y_pred_log
+else:
+    print("\n✅ Standard ist besser – verwende Standard-Modell")
+    lgbm_model = lgbm_model_std
+    y_pred     = y_pred_std
+
+# ============================================================
+# 12. MODELLANNAHMEN VALIDIEREN
+# ============================================================
 print("\n--- Modellannahmen Validierung ---")
 validate_model_assumptions(
     model=lgbm_model,
     X_test=X_test_final,
     y_test=y_test,
-    output_dir=os.path.join(root_dir, "05_plots")
+    output_dir=os.path.join(root_dir, "05_plots"),
+    log_transform=(mae_log < mae_std) 
 )
 
-#---Kreuzvalidierung
+# ============================================================
+# 13. KREUZVALIDIERUNG
+# ============================================================
 print("\n--- Kreuzvalidierung ---")
 tscv = TimeSeriesSplit(n_splits=3)
 scores = cross_validate(
@@ -236,18 +273,17 @@ for i, (mae, r2) in enumerate(zip(-scores["test_MAE"], scores["test_R2"])):
 print(f"\nCV MAE:  {-scores['test_MAE'].mean():.3f} ± {scores['test_MAE'].std():.3f} kWh")
 print(f"CV R²:   {scores['test_R2'].mean():.3f} ± {scores['test_R2'].std():.3f}")
 
-#---Modell Prediciton
-y_pred = lgbm_model.predict(X_test_final)
-
-#---Prediciton visualisiere 
+# ============================================================
+# 14. PREDICTION & VISUALISIERUNG
+# ============================================================
 plot_final_prediction(
-    y_test=y_test_red,
+    y_test=y_test,
     y_pred=y_pred,
     output_dir=os.path.join(root_dir, "05_plots")
 )
-#---Businnes Drivers analysieren
+
 plot_business_drivers(
     model=lgbm_model,
-    X_sample=X_test_final.sample(2000, random_state=42),  # Sample für Speed
+    X_sample=X_test_final.sample(2000, random_state=42),
     output_dir=os.path.join(root_dir, "05_plots")
 )
