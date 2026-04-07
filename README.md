@@ -1,10 +1,10 @@
-# HEAPO – Stromverbrauchsvorhersage für Wärmepumpenhaushalte ⚡🌡️
+# HEAPO – Stromverbrauchsvorhersage ⚡🌡️
 
 **Datenbasis:** Dieses Projekt nutzt den HEAPO-Datensatz (Zenodo 15056919).  
 Brudermüller, T., et al. (2025). HEAPO – An Open Dataset for Heat Pump Optimization.
 
 Dieses Repo beinhaltet eine strukturierte Datenpipeline zur **tagesbasierten Vorhersage 
-des Stromverbrauchs von Schweizer Wärmepumpenhaushalten**. Das Projekt integriert 
+des Stromverbrauchs von Schweizer Haushalten**. Das Projekt integriert 
 Smart-Meter-Messungen, Gebäudeeigenschaften, Vor-Ort-Audit-Protokolle, Wetterdaten 
 und Strompreise, um auf Basis von Machine-Learning-Methoden präzise Verbrauchsprognosen 
 für Energieversorger zu erstellen.
@@ -16,10 +16,7 @@ Business-Verständnis, Datenaufbereitung, Feature Engineering, Modellierung und 
 
 ## 🎯 Forschungsfrage
 
-Inwiefern lässt sich der tägliche Stromverbrauch von Schweizer Haushalten im Kontext 
-der Elektrifizierung des Wärmesektors unter Einfluss von Wetterbedingungen, 
-Gebäudeeigenschaften und Strompreissignalen mithilfe von Machine-Learning-Methoden 
-zuverlässig vorhersagen?
+Wie kann Machine Learning zur zuverlässigen Prognose des täglichen Stromverbrauchs von Schweizer Haushalten eingesetzt werden, um Lastplanung und Beschaffung im Energiesektor zu verbessern?
 
 ---
 
